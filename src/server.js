@@ -19,6 +19,11 @@ import React from 'react';
 import ReactDOM from 'react-dom/server';
 import UniversalRouter from 'universal-router';
 import PrettyError from 'pretty-error';
+import ApolloClient, { createNetworkInterface } from 'apollo-client';
+import { ApolloProvider, renderToStringWithData } from 'react-apollo';
+import fetch from 'isomorphic-fetch';
+
+import { localUrl } from './core/fetch';
 import App from './components/App';
 import Html from './components/Html';
 import { ErrorPageWithoutStyle } from './routes/error/ErrorPage';
@@ -90,11 +95,27 @@ app.use('/graphql', expressGraphQL(req => ({
 // -----------------------------------------------------------------------------
 app.get('*', async (req, res, next) => {
   try {
+
+    let apolloOptions = {
+      uri:localUrl('/graphql'),
+    };
+    if (req.user && req.user.token && req.user.token.idToken){
+      apolloOptions.opts = {
+        headers: {
+          Authorization: 'Bearer ' + req.user.token.idToken
+        }
+      };
+    }
+    const client = new ApolloClient({
+      ssrMode: true,
+      networkInterface: createNetworkInterface(apolloOptions),
+    });
+
     const store = configureStore({
       user: req.user || null,
     }, {
       cookie: req.headers.cookie,
-    });
+    }, client.reducer());
 
     store.dispatch(setRuntimeVariable({
       name: 'initialNow',
@@ -115,6 +136,7 @@ app.get('*', async (req, res, next) => {
       // Initialize a new Redux store
       // http://redux.js.org/docs/basics/UsageWithReact.html
       store,
+      client,
     };
 
     const route = await UniversalRouter.resolve(routes, {
@@ -129,13 +151,25 @@ app.get('*', async (req, res, next) => {
     }
 
     const data = { ...route };
-    data.children = ReactDOM.renderToString(<App context={context}>{route.component}</App>);
+
+    const component = (
+      <App context={context}>
+        <ApolloProvider client={context.client} store={context.store}>
+          {route.component}
+        </ApolloProvider>
+      </App>
+    );
+
+    // data.children = ReactDOM.renderToString(<App context={context}>{route.component}</App>);
+    let contentString = await renderToStringWithData(component);
+    data.children = contentString;
     data.style = [...css].join('');
     data.scripts = [
       assets.vendor.js,
       assets.client.js,
     ];
     data.state = context.store.getState();
+    data.state.apollo = client.store ? client.store.getState().apollo : null;
     if (assets[route.chunk]) {
       data.scripts.push(assets[route.chunk].js);
     }

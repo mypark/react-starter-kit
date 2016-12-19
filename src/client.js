@@ -13,11 +13,34 @@ import ReactDOM from 'react-dom';
 import FastClick from 'fastclick';
 import UniversalRouter from 'universal-router';
 import queryString from 'query-string';
+import ApolloClient, { createNetworkInterface } from 'apollo-client';
+import { ApolloProvider } from 'react-apollo';
+
 import { createPath } from 'history/PathUtils';
 import history from './core/history';
 import App from './components/App';
 import configureStore from './store/configureStore';
 import { ErrorReporter, deepForceUpdate } from './core/devUtils';
+
+let apolloOptions = {
+  ssrMode: false,
+  initialState: { apollo: { data: window.APP_STATE.apollo.data } },
+  ssrForceFetchDelay: 500,
+  networkInterface: createNetworkInterface({
+    uri: 'https://' +  window.location.hostname + '/graphql',
+  }),
+  opts: {
+    credentials: 'same-origin',
+  },
+};
+
+const user = window.APP_STATE.user;
+
+if (user && user.token && user.token.idToken) {
+  apolloOptions.opts.headers = { Authorization: 'Bearer ' + user.token.idToken };
+}
+
+const client = new ApolloClient(apolloOptions);
 
 // Global (context) variables that can be easily accessed from any React component
 // https://facebook.github.io/react/docs/context.html
@@ -31,7 +54,8 @@ const context = {
   },
   // Initialize a new Redux store
   // http://redux.js.org/docs/basics/UsageWithReact.html
-  store: configureStore(window.APP_STATE, { history }),
+  store: configureStore(window.APP_STATE, { history }, client.reducer()),
+  client: client,
 };
 
 function updateTag(tagName, keyName, keyValue, attrName, attrValue) {
@@ -150,8 +174,16 @@ async function onLocationChange(location) {
       return;
     }
 
+    const appComponent = (
+      <App context={context}>
+        <ApolloProvider client={context.client} store={context.store}>
+          {route.component}
+        </ApolloProvider>
+      </App>
+    );
+
     appInstance = ReactDOM.render(
-      <App context={context}>{route.component}</App>,
+      appComponent,
       container,
       () => onRenderComplete(route, location),
     );
@@ -162,6 +194,8 @@ async function onLocationChange(location) {
     if (currentLocation.key !== location.key) {
       return;
     }
+
+
 
     // Display the error in full-screen for development mode
     if (process.env.NODE_ENV !== 'production') {
